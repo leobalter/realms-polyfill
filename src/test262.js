@@ -1,30 +1,18 @@
+/* eslint-disable no-undef */
 {
     class Realm {
         constructor() {
-            this.#iframe = document.createElement('iframe');
-            this.#iframe.setAttribute('sandbox', 'allow-same-origin allow-scripts');
-            this.#iframe.style.display = 'none';
-            this.#realm.attach();
+            if (!$262 || !$262.createRealm) {
+                throw new Error('Cross-Realm Error: Realm creation not supported');
+            }
+            this.#realm = $262.createRealm();
         }
 
-        #iframe = null;
-
-        get #realm() {
-            const attach = () => {
-                document.body.parentElement.appendChild(this.#iframe);
-                return this.#iframe.contentWindow;
-            };
-            const detach = () => {
-                this.#iframe.remove();
-            };
-            return {
-                attach,
-                detach
-            };
-        }
+        #moduleCache = {__proto__: null};
+        #realm = null;
 
         #evaluateInRealm = (str) => {
-            const result = this.#iframe.contentWindow.eval(str);
+            const result = this.#realm.evalScript(str);
 
             return this.#getPrimitiveOrWrappedCallable(result);
         };
@@ -56,6 +44,17 @@
             return value == null || typeof value !== 'object';
         }
 
+        #errorCatcher(fn) {
+            try {
+                return fn();
+            } catch (err) {
+                if (err && typeof err === 'object') {
+                    throw new TypeError(`Cross-Realm Error: ${err.name}: ${err.message}`)
+                } // Else
+                throw new TypeError(`Cross-Realm Error: ${String(err)}`);
+            }
+        }
+
         evaluate(sourceText) {
             try {
                 this.#realm;
@@ -69,6 +68,12 @@
             return this.#errorCatcher(() => this.#evaluateInRealm(sourceText));
         }
 
+        #exportGetter(specifierString, exportNameString) {
+            if (!Object.prototype.hasOwnProperty.call(this.#moduleCache[specifierString], exportNameString)) {
+                throw new TypeError(`${specifierString} has no export named ${exportNameString}`);
+            }
+            return this.#moduleCache[specifierString][exportNameString];
+        }
         // eslint-disable-next-line no-unused-vars
         importValue(specifier, exportName) {
             try {
@@ -76,18 +81,18 @@
             } catch (error) {
                 throw new TypeError('Invalid realm object');
             }
-            throw new Error('importValue not supported');
-        }
 
-        #errorCatcher(fn) {
-            try {
-                return fn();
-            } catch (err) {
-                if (err && typeof err === 'object') {
-                    throw new TypeError(`Cross-Realm Error: ${err.name}: ${err.message}`)
-                } // Else
-                throw new TypeError(`Cross-Realm Error: ${String(err)}`);
+            let specifierString = String(specifier);
+            let exportNameString = String(exportName);
+
+            if (this.#moduleCache[specifierString]) {
+                return Promise.resolve(this.#exportGetter(specifierString, exportNameString));
             }
+
+            return import(specifierString).then(module => {
+                this.#moduleCache[specifierString] = module;
+                return this.#exportGetter(specifierString, exportNameString);
+            });
         }
     }
 
